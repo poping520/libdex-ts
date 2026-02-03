@@ -3,7 +3,7 @@ import { DexUtils } from "./utils";
 const kSHA1DigestLen = 20;
 
 // https://android.googlesource.com/platform/dalvik/+/refs/tags/android-4.4.4_r2.0.1/libdex/DexFile.h#216
-export type DexHeader = {
+export interface DexHeader {
     magic: string;         /* u1[8], includes version number */
     checksum: number;      /* u4, adler32 checksum */
     signature: Uint8Array; /* u1[20], SHA-1 hash */
@@ -27,27 +27,27 @@ export type DexHeader = {
     classDefsOff: number;
     dataSize: number;
     dataOff: number;
-};
+}
 
-export type DexFieldId = {
+export interface DexFieldId {
     classIdx: number; /* u2, index into typeIds list for defining class */
     typeIdx: number;  /* u2, index into typeIds for field type */
     nameIdx: number;  /* u4, index into stringIds for field name */
 };
 
-export type DexMethodId = {
+export interface DexMethodId {
     classIdx: number; /* u2, index into typeIds list for defining class */
     protoIdx: number; /* u2, index into protoIds for method prototype */
     nameIdx: number;  /* u4, index into stringIds for method name */
-};
+}
 
-export type DexProtoId = {
+export interface DexProtoId {
     shortyIdx: number;     /* u4, index into stringIds for shorty descriptor */
     returnTypeIdx: number; /* u4, index into typeIds list for return type */
     parametersOff: number; /* u4, file offset to type_list for parameter types */
-};
+}
 
-export type DexClassDef = {
+export interface DexClassDef {
     classIdx: number;        /* u4, index into typeIds for this class */
     accessFlags: number;     /* u4, access flags */
     superclassIdx: number;   /* u4, index into typeIds for superclass */
@@ -56,52 +56,51 @@ export type DexClassDef = {
     annotationsOff: number;  /* u4, file offset to annotations_directory_item */
     classDataOff: number;    /* u4, file offset to class_data_item */
     staticValuesOff: number; /* u4, file offset to DexEncodedArray */
-};
+}
 
 export interface DexTypeList {
     size: number; /* u4 #of entries in list */
     typeIdxList: number[]; /* u2[] entries */
 }
 
-export type DexMapItem = {
+export interface DexMapItem {
     type: number;      /* u2, type code (see kDexType* above) */
     unused: number;    /* u2, unused */
     size: number;      /* u4, count of items of the indicated type */
     offset: number;    /* u4, file offset to the start of data */
-};
-
+}
 
 // https://android.googlesource.com/platform/dalvik/+/refs/tags/android-4.4.4_r2.0.1/libdex/DexClass.h#28
 
 /* expanded form of a class_data_item header */
-export type DexClassDataHeader = {
+export interface DexClassDataHeader {
     staticFieldsSize: number;   // u4
     instanceFieldsSize: number; // u4
     directMethodsSize: number;  // u4
     virtualMethodsSize: number; // u4
-};
+}
 
 /* expanded form of encoded_field */
-export type DexField = {
+export interface DexField {
     fieldIdx: number;    /* u4 index to a field_id_item */
     accessFlags: number; /* u4 */
-};
+}
 
 /* expanded form of encoded_method */
-export type DexMethod = {
+export interface DexMethod {
     methodIdx: number;    /* u4 index to a method_id_item */
     accessFlags: number;  /* u4 */
     codeOff: number;      /* u4 file offset to a code_item */
-};
+}
 
 /* expanded form of class_data_item */
-export type DexClassData = {
+export interface DexClassData {
     header: DexClassDataHeader;
     staticFields: DexField[];
     instanceFields: DexField[];
     directMethods: DexMethod[];
     virtualMethods: DexMethod[];
-};
+}
 
 class ByteBuffer {
     public readonly bytes: Uint8Array;
@@ -218,7 +217,7 @@ class ByteBuffer {
 /**
  * DEX 文件解析器：负责解析 Header、字符串表、类型表、方法/字段/类定义等结构。
  */
-export class DexFile {
+export class Dexfile {
     public readonly buffer: ByteBuffer;
     public readonly header: DexHeader;
 
@@ -277,8 +276,8 @@ export class DexFile {
     /**
      * 从字节数组创建 DexFile 实例。
      */
-    static from(bytes: Uint8Array): DexFile {
-        return new DexFile(bytes);
+    static from(bytes: Uint8Array): Dexfile {
+        return new Dexfile(bytes);
     }
 
     private hasValidMagic(magic: string): boolean {
@@ -338,6 +337,18 @@ export class DexFile {
      */
     getClassNameByIdx(typeIdx: number): string {
         return DexUtils.descriptorToDot(this.getTypeDescriptorByIdx(typeIdx));
+    }
+
+    getTypeListByOff(off: number): DexTypeList {
+        const size = this.buffer.setPosition(off).readU32();
+        const idxList: number[] = [];
+        for (let i = 0; i < size; i++) {
+            idxList.push(this.buffer.readU16());
+        }
+        return {
+            size: size,
+            typeIdxList: idxList
+        }   
     }
 
     /**
@@ -414,16 +425,7 @@ export class DexFile {
         if (classDef.interfacesOff === 0) {
             return null;
         }
-
-        const size = this.buffer.setPosition(classDef.interfacesOff).readU32();
-        const idxList: number[] = [];
-        for (let i = 0; i < size; i++) {
-            idxList.push(this.buffer.readU16());
-        }
-        return {
-            size: size,
-            typeIdxList: idxList
-        }
+        return this.getTypeListByOff(classDef.interfacesOff);
     }
 
     /**

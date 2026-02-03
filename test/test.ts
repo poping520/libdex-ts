@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import {DexFile, DexClassLoader} from "../src";
+import {Dexfile, DexClassLoader} from "../src";
 
 const dexPath = path.resolve(__dirname, "boot-okhttp.dex");
 const buf = fs.readFileSync(dexPath);
 
-const dex = new DexFile(buf);
+const dex = new Dexfile(buf);
 
 console.log("magic:", dex.header.magic);
 console.log("fileSize:", dex.header.fileSize);
@@ -39,7 +39,8 @@ const classData = dex.getClassData(classDef);
 console.log("classData:", classData);
 
 const classLoader = new DexClassLoader(dex);
-console.log("findClass:", classLoader.findClass("com.android.okhttp.OkHttpClient"));
+const javaClass = classLoader.findClass("com.android.okhttp.OkHttpClient")
+console.log("findClass:", javaClass);
 
 
 // const maxClasses = Math.min(10, dex.header.classDefsSize);

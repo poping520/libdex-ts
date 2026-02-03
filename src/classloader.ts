@@ -1,4 +1,4 @@
-import {DexFile} from "./dex-file";
+import { Dexfile, DexField, DexMethod } from "./dexfile";
 import { DexUtils } from "./utils";
 
 /**
@@ -41,14 +41,14 @@ export interface JavaClass {
 
 export class DexClassLoader {
 
-    private readonly dexFile: DexFile;
+    private readonly dexFile: Dexfile;
 
     private readonly classCache = new Map<string, JavaClass | null>();
 
     /**
      * 创建一个基于 DexFile 的类加载器（带缓存）。
      */
-    constructor(dexFile: DexFile) {
+    constructor(dexFile: Dexfile) {
         this.dexFile = dexFile;
     }
 
@@ -83,25 +83,17 @@ export class DexClassLoader {
             }
         }
 
-        // Fields
-        const fields: JavaField[] = []
         const classData = this.dexFile.getClassData(classDef);
-        let fieldIdx = 0;
-        for (const df of classData.instanceFields) {
-            fieldIdx += df.fieldIdx;
-            const fieldId = this.dexFile.getFieldId(fieldIdx);
-            const typeName = this.dexFile.getClassNameByIdx(fieldId.typeIdx);
-            const name = this.dexFile.getStringById(fieldId.nameIdx);
 
-            fields.push({
-                accessFlags: df.accessFlags,
-                name: name,
-                type: typeName
-            });
-        }
+        // Fields
+        const fields: JavaField[] = [];
+        this.parseDexFields(classData.instanceFields, fields);
+        this.parseDexFields(classData.staticFields, fields);
 
         // Methods
-
+        const methods: JavaMethod[] = [];
+        this.parseDexMethods(classData.directMethods, methods);
+        this.parseDexMethods(classData.virtualMethods, methods);
 
         const cls: JavaClass = {
             accessFlags: classDef.accessFlags,
@@ -109,11 +101,57 @@ export class DexClassLoader {
             super: superClassName,
             interfaces: interfaces,
             fields: fields,
-            methods: null,
+            methods: methods,
         };
 
         this.classCache.set(descriptor, cls);
         return cls;
+    }
+
+    private parseDexFields(dexFields: DexField[], out: JavaField[]): void {
+        let fieldIdx = 0;
+        for (const df of dexFields) {
+            fieldIdx += df.fieldIdx;
+            const fieldId = this.dexFile.getFieldId(fieldIdx);
+            const type = this.dexFile.getClassNameByIdx(fieldId.typeIdx);
+            const name = this.dexFile.getStringById(fieldId.nameIdx);
+
+            out.push({
+                accessFlags: df.accessFlags,
+                name,
+                type
+            });
+        }
+    }
+
+    private parseDexMethods(dexMethods: DexMethod[], out: JavaMethod[]): void {
+        let methodIdx = 0;
+        for (const dm of dexMethods) {
+            methodIdx += dm.methodIdx;
+            const methodId = this.dexFile.getMethodId(methodIdx);
+            const name = this.dexFile.getStringById(methodId.nameIdx);
+
+            const protoId = this.dexFile.getProtoId(methodId.protoIdx);
+
+            // const shorty = this.dexFile.getStringById(protoId.shortyIdx);
+            const returnType = this.dexFile.getClassNameByIdx(protoId.returnTypeIdx);
+
+            const parameterTypes: string[] = [];
+            if (protoId.parametersOff > 0) {
+                const typeList = this.dexFile.getTypeListByOff(protoId.parametersOff);
+                for (const typeIdx of typeList.typeIdxList) {
+                    const className = this.dexFile.getClassNameByIdx(typeIdx);
+                    parameterTypes.push(className);
+                }
+            }
+
+            out.push({
+                accessFlags: dm.accessFlags,
+                name,
+                returnType,
+                parameterTypes
+            });
+        }
     }
 
     private normalizeToDescriptor(className: string): string {
@@ -126,3 +164,5 @@ export class DexClassLoader {
         return DexUtils.dotToDescriptor(className);
     }
 }
+
+
