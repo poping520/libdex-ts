@@ -5,18 +5,18 @@ export namespace DexUtils {
     /**
      * 计算 UTF-8 字符串的 31-based hash（与 Java String.hashCode 类似）。
      */
-    export function computeUtf8Hash(utf8Str: string): number {
-        if (utf8Str == null) {
-            throw new TypeError("utf8Str is null or undefined");
-        }
+    // export function computeUtf8Hash(utf8Str: string): number {
+    //     if (utf8Str == null) {
+    //         throw new TypeError("utf8Str is null or undefined");
+    //     }
 
-        const bytes = new TextEncoder().encode(utf8Str);
-        let hash = 1 >>> 0;
-        for (let i = 0; i < bytes.length; i++) {
-            hash = (hash * 31 + bytes[i]) >>> 0;
-        }
-        return hash;
-    }
+    //     const bytes = new TextEncoder().encode(utf8Str);
+    //     let hash = 1 >>> 0;
+    //     for (let i = 0; i < bytes.length; i++) {
+    //         hash = (hash * 31 + bytes[i]) >>> 0;
+    //     }
+    //     return hash;
+    // }
 
     export function dotToDescriptor(str: string): string {
         if (str == null) {

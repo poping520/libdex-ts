@@ -1,5 +1,4 @@
 import { DexUtils } from "./utils";
-import "fast-text-encoding"
 
 const kSHA1DigestLen = 20;
 
@@ -220,14 +219,109 @@ export enum DexAccessFlag {
         | DeclaredSynchronized)
 }
 
+// see: https://github.com/samthor/fast-text-encoding
+class FastTextDecoder {
+
+    private readonly decodeImpl: (bytes: Uint8Array) => string;
+
+    constructor(encoding: string) {
+        const normalized = encoding.toLowerCase();
+        const isUtf8 = normalized === "utf-8" || normalized === "utf8" || normalized === "unicode-1-1-utf-8";
+
+        const hasBuffer = typeof Buffer !== "undefined" && typeof Buffer.from === "function";
+        if (hasBuffer) {
+            const bufferEncoding = (isUtf8 ? "utf8" : normalized) as BufferEncoding;
+            this.decodeImpl = (bytes) => {
+                const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                return buf.toString(bufferEncoding);
+            };
+            return;
+        }
+
+        if (typeof TextDecoder !== "undefined") {
+            const decoder = new TextDecoder(normalized);
+            this.decodeImpl = (bytes) => decoder.decode(bytes);
+            return;
+        }
+
+        this.decodeImpl = (bytes) => (
+            isUtf8 ? FastTextDecoder.decodeUft8Fallback(bytes) : FastTextDecoder.decodeAsciiFallback(bytes)
+        );
+    }
+
+    decode(bytes: Uint8Array): string {
+        return this.decodeImpl(bytes);
+    }
+
+    private static decodeAsciiFallback(bytes: Uint8Array): string {
+        const chunkSize = 0x8000;
+        let result = "";
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+            const chunk = bytes.subarray(offset, offset + chunkSize);
+            const arrayLike = chunk as unknown as number[];
+            result += String.fromCharCode.apply(null, arrayLike);
+        }
+        return result;
+    }
+
+    private static decodeUft8Fallback(bytes: Uint8Array): string {
+        let inputIndex = 0;
+        const pendingSize = Math.min(256 * 256, bytes.length + 1);
+        const pending = new Uint16Array(pendingSize);
+        const chunks: string[] = [];
+        let pendingIndex = 0;
+
+        for (;;) {
+            const more = inputIndex < bytes.length;
+            if (!more || pendingIndex >= pendingSize - 1) {
+                const subarray = pending.subarray(0, pendingIndex);
+                const arrayLike = subarray as unknown as number[];
+                chunks.push(String.fromCharCode.apply(null, arrayLike));
+
+                if (!more) {
+                    return chunks.join("");
+                }
+
+                bytes = bytes.subarray(inputIndex);
+                inputIndex = 0;
+                pendingIndex = 0;
+            }
+
+            const byte1 = bytes[inputIndex++];
+            if ((byte1 & 0x80) === 0) {
+                pending[pendingIndex++] = byte1;
+            } else if ((byte1 & 0xe0) === 0xc0) {
+                const byte2 = bytes[inputIndex++] & 0x3f;
+                pending[pendingIndex++] = ((byte1 & 0x1f) << 6) | byte2;
+            } else if ((byte1 & 0xf0) === 0xe0) {
+                const byte2 = bytes[inputIndex++] & 0x3f;
+                const byte3 = bytes[inputIndex++] & 0x3f;
+                pending[pendingIndex++] = ((byte1 & 0x1f) << 12) | (byte2 << 6) | byte3;
+            } else if ((byte1 & 0xf8) === 0xf0) {
+                const byte2 = bytes[inputIndex++] & 0x3f;
+                const byte3 = bytes[inputIndex++] & 0x3f;
+                const byte4 = bytes[inputIndex++] & 0x3f;
+                let codepoint = ((byte1 & 0x07) << 0x12) | (byte2 << 0x0c) | (byte3 << 0x06) | byte4;
+                if (codepoint > 0xffff) {
+                    codepoint -= 0x10000;
+                    pending[pendingIndex++] = ((codepoint >>> 10) & 0x3ff) | 0xd800;
+                    codepoint = 0xdc00 | (codepoint & 0x3ff);
+                }
+                pending[pendingIndex++] = codepoint;
+            } else {
+                // invalid initial byte, skip
+            }
+        }
+    }
+}
+
+
 class ByteBuffer {
     
     public readonly bytes: Uint8Array;
     private readonly view: DataView;
     private position: number;
-
-    private static readonly decoder = new TextDecoder("ascii");
-    private static readonly uft8Decoder = new TextDecoder("utf-8");
+    private static readonly decoder = new FastTextDecoder("utf-8");
 
     constructor(bytes: Uint8Array) {
         this.bytes = bytes;
@@ -329,7 +423,7 @@ class ByteBuffer {
         return result;
     }
 
-    readString(len: number): string {
+    readStringUtf8(len: number): string {
         const array = this.bytes.subarray(this.position, this.position + len);
         this.position += len;
         return ByteBuffer.decoder.decode(array);
@@ -340,7 +434,7 @@ class ByteBuffer {
         while (end < this.bytes.length && this.bytes[end] !== 0) {
             end++;
         }
-        const str = ByteBuffer.uft8Decoder.decode(this.bytes.subarray(this.position, end));
+        const str = ByteBuffer.decoder.decode(this.bytes.subarray(this.position, end));
         this.position = end + 1;
         return str;
     }
@@ -358,11 +452,6 @@ class ByteBuffer {
 
     readBytesAt(off: number, len: number): Uint8Array {
         return this.bytes.subarray(off, off + len);
-    }
-
-    readStringUtf8At(off: number, len: number): string {
-        const array = this.bytes.subarray(off, off + len);
-        return ByteBuffer.uft8Decoder.decode(array);
     }
 }
 
@@ -399,7 +488,7 @@ export class DexFile {
 
     private parseHeader(): DexHeader {
         return {
-            magic: this.buffer.readString(8),
+            magic: this.buffer.readStringUtf8(8),
             checksum: this.buffer.readU32(),
             signature: this.buffer.readBytes(kSHA1DigestLen),
             fileSize: this.buffer.readU32(),
