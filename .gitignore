@@ -1,5 +1,11 @@
 .idea
+.vscode
 node_modules
 doc/dalvik
 dist
 package-lock.json
+
+test/frida-test/.vscode
+test/frida-test/node_modules
+test/frida-test/package-lock.json
+test/frida-test/agent.js

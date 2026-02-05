@@ -387,6 +387,159 @@ class Utf8Text {
     }
 }
 
+class NativePointerBuffer {
+    private readonly pointer: NativePointer;
+    private readonly size: number;
+    private position: number;
+    private static readonly utf8Text = new Utf8Text("utf-8");
+
+    constructor(pointer: NativePointer, size: number) {
+        this.pointer = pointer;
+        this.size = size;
+        this.position = 0;
+    }
+
+    setPosition(position: number): NativePointerBuffer {
+        if (position < 0 || position > this.size) {
+            throw new RangeError(`Position out of bounds: ${position}`);
+        }
+        this.position = position;
+        return this;
+    }
+
+    getPosition(): number {
+        return this.position;
+    }
+
+    skip(len: number) {
+        this.position += len;
+    }
+
+    readU8(): number {
+        const val = this.pointer.add(this.position).readU8();
+        this.position += 1;
+        return val;
+    }
+
+    readU16(): number {
+        const val = this.pointer.add(this.position).readU16();
+        this.position += 2;
+        return val;
+    }
+
+    readU32(): number {
+        const val = this.pointer.add(this.position).readU32();
+        this.position += 4;
+        return val;
+    }
+
+    readULeb128(): number {
+        let shift = 0;
+        let result = 0;
+        let tmpPos = this.position;
+
+        while (true) {
+            if (tmpPos >= this.size) {
+                throw new RangeError("ULEB128 out of range");
+            }
+
+            const b = this.pointer.add(tmpPos).readU8();
+            tmpPos++;
+            result |= (b & 0x7f) << shift;
+
+            if ((tmpPos - this.position) > 5) {
+                throw new Error("ULEB128 too large");
+            }
+
+            if ((b & 0x80) === 0) {
+                break;
+            }
+
+            shift += 7;
+        }
+        this.position = tmpPos;
+        return result;
+    }
+
+    readSLeb128(): number {
+        let shift = 0;
+        let result = 0;
+        let tmpPos = this.position;
+        let b = 0;
+
+        while (true) {
+            if (tmpPos >= this.size) {
+                throw new RangeError("SLEB128 out of range");
+            }
+
+            b = this.pointer.add(tmpPos).readU8();
+            tmpPos++;
+            result |= (b & 0x7f) << shift;
+            shift += 7;
+
+            if ((tmpPos - this.position) > 5) {
+                throw new Error("SLEB128 too large");
+            }
+
+            if ((b & 0x80) === 0) {
+                break;
+            }
+        }
+
+        if (shift < 32 && (b & 0x40) !== 0) {
+            result |= (-1 << shift);
+        }
+
+        this.position = tmpPos;
+        return result;
+    }
+
+    readStringUtf8(len: number): string {
+        const bytes = this.pointer.add(this.position).readByteArray(len);
+        if (!bytes) {
+            throw new Error("Failed to read bytes for string");
+        }
+        const array = new Uint8Array(bytes);
+        this.position += len;
+        return NativePointerBuffer.utf8Text.decode(array);
+    }
+
+    readStringUtf8NextZero(): string {
+        let end = this.position;
+        while (end < this.size && this.pointer.add(end).readU8() !== 0) {
+            end++;
+        }
+        const len = end - this.position;
+        const bytes = this.pointer.add(this.position).readByteArray(len);
+        if (!bytes) {
+            throw new Error("Failed to read bytes for string");
+        }
+        const str = NativePointerBuffer.utf8Text.decode(new Uint8Array(bytes));
+        this.position = end + 1;
+        return str;
+    }
+
+    readBytes(len: number): Uint8Array {
+        const bytes = this.pointer.add(this.position).readByteArray(len);
+        if (!bytes) {
+            throw new Error("Failed to read bytes");
+        }
+        this.position += len;
+        return new Uint8Array(bytes);
+    }
+
+    readU32At(off: number): number {
+        return this.pointer.add(off).readU32();
+    }
+
+    readBytesAt(off: number, len: number): Uint8Array {
+        const bytes = this.pointer.add(off).readByteArray(len);
+        if (!bytes) {
+            throw new Error("Failed to read bytes");
+        }
+        return new Uint8Array(bytes);
+    }
+}
 
 class ByteBuffer {
     
@@ -531,7 +684,7 @@ class ByteBuffer {
  * DEX 文件解析器：负责解析 Header、字符串表、类型表、方法/字段/类定义等结构。
  */
 export class DexFile {
-    public readonly buffer: ByteBuffer;
+    public readonly buffer: ByteBuffer | NativePointerBuffer;
     public readonly header: DexHeader;
 
     private readonly stringCache = new Map<number, string>();
@@ -539,21 +692,29 @@ export class DexFile {
 
     /**
      * 创建并解析一个 DEX 文件。
-     * @param bytes DEX 文件的原始字节数组
+     * @param pointerOrBytes Frida NativePointer 或 DEX 文件的原始字节数组
+     * @param size 当传入 NativePointer 时，指定 DEX 文件大小
      */
-    constructor(bytes: Uint8Array) {
-        this.buffer = new ByteBuffer(bytes);
+    constructor(pointerOrBytes: NativePointer | Uint8Array, size?: number) {
+        if (pointerOrBytes instanceof NativePointer) {
+            if (size === undefined) {
+                throw new Error("Size must be provided when constructing with NativePointer");
+            }
+            this.buffer = new NativePointerBuffer(pointerOrBytes, size);
+        } else {
+            this.buffer = new ByteBuffer(pointerOrBytes);
+        }
+
         this.header = this.parseHeader();
 
         if (!this.hasValidMagic(this.header.magic)) {
             throw new Error(`Invalid DEX magic: ${this.header.magic}`);
         }
 
-        if (this.header.fileSize !== bytes.length) {
-            // keep behavior close to libdex (it errors unless continue-on-error),
-            // but for now throw to keep the TS library strict.
+        const actualSize = pointerOrBytes instanceof NativePointer ? size! : pointerOrBytes.length;
+        if (this.header.fileSize !== actualSize) {
             throw new Error(
-                `DEX fileSize mismatch: header=${this.header.fileSize} actual=${bytes.length}`
+                `DEX fileSize mismatch: header=${this.header.fileSize} actual=${actualSize}`
             );
         }
     }

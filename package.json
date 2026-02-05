@@ -28,6 +28,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.10.7",
+    "@types/frida-gum": "^18.8.2",
     "rimraf": "^6.0.1",
     "tsup": "^8.0.2",
     "tsx": "^4.19.2",
