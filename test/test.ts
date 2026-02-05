@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {DexFile} from "../src/dexfile";
 import {DexClassLoader} from "../src/classloader";
 import {DexClassDumper} from "../src/classdump";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const dexPath = path.resolve(__dirname, "boot-okhttp.dex");
 const buf = fs.readFileSync(dexPath);

@@ -1,4 +1,5 @@
 import { DexUtils } from "./utils";
+import "fast-text-encoding"
 
 const kSHA1DigestLen = 20;
 
@@ -220,9 +221,13 @@ export enum DexAccessFlag {
 }
 
 class ByteBuffer {
+    
     public readonly bytes: Uint8Array;
     private readonly view: DataView;
     private position: number;
+
+    private static readonly decoder = new TextDecoder("ascii");
+    private static readonly uft8Decoder = new TextDecoder("utf-8");
 
     constructor(bytes: Uint8Array) {
         this.bytes = bytes;
@@ -327,7 +332,7 @@ class ByteBuffer {
     readString(len: number): string {
         const array = this.bytes.subarray(this.position, this.position + len);
         this.position += len;
-        return new TextDecoder("ascii").decode(array);
+        return ByteBuffer.decoder.decode(array);
     }
 
     readStringUtf8NextZero(): string {
@@ -335,9 +340,7 @@ class ByteBuffer {
         while (end < this.bytes.length && this.bytes[end] !== 0) {
             end++;
         }
-        const str = new TextDecoder("utf-8").decode(
-            this.bytes.subarray(this.position, end)
-        );
+        const str = ByteBuffer.uft8Decoder.decode(this.bytes.subarray(this.position, end));
         this.position = end + 1;
         return str;
     }
@@ -359,7 +362,7 @@ class ByteBuffer {
 
     readStringUtf8At(off: number, len: number): string {
         const array = this.bytes.subarray(off, off + len);
-        return new TextDecoder("utf-8").decode(array);
+        return ByteBuffer.uft8Decoder.decode(array);
     }
 }
 

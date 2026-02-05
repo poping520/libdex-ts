@@ -10,4 +10,8 @@ test/
 
 node_modules/
 
+.gitignore
+
 package-lock.json
+
+tsup.config.ts

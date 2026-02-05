@@ -1,13 +1,15 @@
 {
   "name": "libdex-ts",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A TypeScript library for parsing Android DEX files",
   "homepage": "https://github.com/poping520/libdex-ts",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
@@ -24,6 +26,9 @@
   },
   "author": "poping520",
   "license": "MIT",
+  "dependencies": {
+    "fast-text-encoding": "^1.0.6"
+  },
   "devDependencies": {
     "@types/node": "^22.10.7",
     "rimraf": "^6.0.1",
