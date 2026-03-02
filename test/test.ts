@@ -13,6 +13,7 @@ const dexPath = path.resolve(__dirname, "boot-okhttp.dex");
 const buf = fs.readFileSync(dexPath);
 
 const dex = new DexFile(buf);
+console.log(dex.validateIntegrity())
 const loader = new DexClassLoader(dex);
 
 function testDexHeader() {

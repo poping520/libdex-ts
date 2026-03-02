@@ -1,6 +1,14 @@
 import { DexUtils } from "./utils";
 
 const kSHA1DigestLen = 20;
+const DEX_HEADER_SIZE = 0x70;
+const DEX_SIGNATURE_DATA_OFFSET = 32;
+const DEX_CHECKSUM_DATA_OFFSET = 12;
+
+export interface DexIntegrityResult {
+    ok: boolean;
+    errors: string[];
+}
 
 // https://android.googlesource.com/platform/dalvik/+/refs/tags/android-4.4.4_r2.0.1/libdex/DexFile.h#216
 export interface DexHeader {
@@ -206,17 +214,17 @@ export enum DexAccessFlag {
     DeclaredSynchronized    = 0x00020000,
 
     ClassMask               = (Public | Final | Interface | Abstract
-        | Synthetic | Annotation | Enum),
+                                | Synthetic | Annotation | Enum),
 
     InnerClassMask          = (ClassMask | Private | Protected | Static),
 
     FieldMask               = (Public | Private | Protected | Static | Final
-        | Volatile | Transient | Synthetic | Enum),
+                                | Volatile | Transient | Synthetic | Enum),
 
     MethodMask              = (Public | Private | Protected | Static | Final
-        | Synchronized | Bridge | Varargs | Native
-        | Abstract | Strict | Synthetic | Constructor
-        | DeclaredSynchronized)
+                                | Synchronized | Bridge | Varargs | Native
+                                | Abstract | Strict | Synthetic | Constructor
+                                | DeclaredSynchronized)
 }
 
 // see: https://github.com/samthor/fast-text-encoding
@@ -387,162 +395,8 @@ class Utf8Text {
     }
 }
 
-class NativePointerBuffer {
-    private readonly pointer: NativePointer;
-    private readonly size: number;
-    private position: number;
-    private static readonly utf8Text = new Utf8Text("utf-8");
-
-    constructor(pointer: NativePointer, size: number) {
-        this.pointer = pointer;
-        this.size = size;
-        this.position = 0;
-    }
-
-    setPosition(position: number): NativePointerBuffer {
-        if (position < 0 || position > this.size) {
-            throw new RangeError(`Position out of bounds: ${position}`);
-        }
-        this.position = position;
-        return this;
-    }
-
-    getPosition(): number {
-        return this.position;
-    }
-
-    skip(len: number) {
-        this.position += len;
-    }
-
-    readU8(): number {
-        const val = this.pointer.add(this.position).readU8();
-        this.position += 1;
-        return val;
-    }
-
-    readU16(): number {
-        const val = this.pointer.add(this.position).readU16();
-        this.position += 2;
-        return val;
-    }
-
-    readU32(): number {
-        const val = this.pointer.add(this.position).readU32();
-        this.position += 4;
-        return val;
-    }
-
-    readULeb128(): number {
-        let shift = 0;
-        let result = 0;
-        let tmpPos = this.position;
-
-        while (true) {
-            if (tmpPos >= this.size) {
-                throw new RangeError("ULEB128 out of range");
-            }
-
-            const b = this.pointer.add(tmpPos).readU8();
-            tmpPos++;
-            result |= (b & 0x7f) << shift;
-
-            if ((tmpPos - this.position) > 5) {
-                throw new Error("ULEB128 too large");
-            }
-
-            if ((b & 0x80) === 0) {
-                break;
-            }
-
-            shift += 7;
-        }
-        this.position = tmpPos;
-        return result;
-    }
-
-    readSLeb128(): number {
-        let shift = 0;
-        let result = 0;
-        let tmpPos = this.position;
-        let b = 0;
-
-        while (true) {
-            if (tmpPos >= this.size) {
-                throw new RangeError("SLEB128 out of range");
-            }
-
-            b = this.pointer.add(tmpPos).readU8();
-            tmpPos++;
-            result |= (b & 0x7f) << shift;
-            shift += 7;
-
-            if ((tmpPos - this.position) > 5) {
-                throw new Error("SLEB128 too large");
-            }
-
-            if ((b & 0x80) === 0) {
-                break;
-            }
-        }
-
-        if (shift < 32 && (b & 0x40) !== 0) {
-            result |= (-1 << shift);
-        }
-
-        this.position = tmpPos;
-        return result;
-    }
-
-    readStringUtf8(len: number): string {
-        const bytes = this.pointer.add(this.position).readByteArray(len);
-        if (!bytes) {
-            throw new Error("Failed to read bytes for string");
-        }
-        const array = new Uint8Array(bytes);
-        this.position += len;
-        return NativePointerBuffer.utf8Text.decode(array);
-    }
-
-    readStringUtf8NextZero(): string {
-        let end = this.position;
-        while (end < this.size && this.pointer.add(end).readU8() !== 0) {
-            end++;
-        }
-        const len = end - this.position;
-        const bytes = this.pointer.add(this.position).readByteArray(len);
-        if (!bytes) {
-            throw new Error("Failed to read bytes for string");
-        }
-        const str = NativePointerBuffer.utf8Text.decode(new Uint8Array(bytes));
-        this.position = end + 1;
-        return str;
-    }
-
-    readBytes(len: number): Uint8Array {
-        const bytes = this.pointer.add(this.position).readByteArray(len);
-        if (!bytes) {
-            throw new Error("Failed to read bytes");
-        }
-        this.position += len;
-        return new Uint8Array(bytes);
-    }
-
-    readU32At(off: number): number {
-        return this.pointer.add(off).readU32();
-    }
-
-    readBytesAt(off: number, len: number): Uint8Array {
-        const bytes = this.pointer.add(off).readByteArray(len);
-        if (!bytes) {
-            throw new Error("Failed to read bytes");
-        }
-        return new Uint8Array(bytes);
-    }
-}
-
 class ByteBuffer {
-    
+
     public readonly bytes: Uint8Array;
     private readonly view: DataView;
     private position: number;
@@ -684,7 +538,7 @@ class ByteBuffer {
  * DEX 文件解析器：负责解析 Header、字符串表、类型表、方法/字段/类定义等结构。
  */
 export class DexFile {
-    public readonly buffer: ByteBuffer | NativePointerBuffer;
+    public readonly buffer: ByteBuffer;
     public readonly header: DexHeader;
 
     private readonly stringCache = new Map<number, string>();
@@ -692,31 +546,22 @@ export class DexFile {
 
     /**
      * 创建并解析一个 DEX 文件。
-     * @param pointerOrBytes Frida NativePointer 或 DEX 文件的原始字节数组
-     * @param size 当传入 NativePointer 时，指定 DEX 文件大小
+     * @param bytes DEX 文件的原始字节数组
      */
-    constructor(pointerOrBytes: NativePointer | Uint8Array, size?: number) {
-        if (pointerOrBytes instanceof NativePointer) {
-            if (size === undefined) {
-                throw new Error("Size must be provided when constructing with NativePointer");
-            }
-            this.buffer = new NativePointerBuffer(pointerOrBytes, size);
-        } else {
-            this.buffer = new ByteBuffer(pointerOrBytes);
-        }
-
+    constructor(bytes: Uint8Array) {
+        this.buffer = new ByteBuffer(bytes);
         this.header = this.parseHeader();
 
         if (!this.hasValidMagic(this.header.magic)) {
             throw new Error(`Invalid DEX magic: ${this.header.magic}`);
         }
 
-        const actualSize = pointerOrBytes instanceof NativePointer ? size! : pointerOrBytes.length;
-        if (this.header.fileSize !== actualSize) {
+        if (this.header.fileSize !== bytes.length) {
             throw new Error(
-                `DEX fileSize mismatch: header=${this.header.fileSize} actual=${actualSize}`
+                `DEX fileSize mismatch: header=${this.header.fileSize} actual=${bytes.length}`
             );
         }
+
     }
 
     private parseHeader(): DexHeader {
@@ -757,6 +602,80 @@ export class DexFile {
     private hasValidMagic(magic: string): boolean {
         // "dex\n035\0" etc
         return /^dex\n\d{3}\0$/.test(magic);
+    }
+
+    /**
+     * 校验 DEX 文件完整性（结构边界 + header 中摘要/校验和）。
+     */
+    validateIntegrity(): DexIntegrityResult {
+        const errors: string[] = [];
+        const bytes = this.buffer.bytes;
+        const fileSize = bytes.length;
+
+        if (!this.hasValidMagic(this.header.magic)) {
+            errors.push(`Invalid DEX magic: ${this.header.magic}`);
+        }
+
+        if (this.header.fileSize !== fileSize) {
+            errors.push(`fileSize mismatch: header=${this.header.fileSize}, actual=${fileSize}`);
+        }
+
+        if (this.header.headerSize !== DEX_HEADER_SIZE) {
+            errors.push(`headerSize mismatch: expected=${DEX_HEADER_SIZE}, actual=${this.header.headerSize}`);
+        }
+
+        this.validateSection(errors, "stringIds", this.header.stringIdsOff, this.header.stringIdsSize, 4, fileSize);
+        this.validateSection(errors, "typeIds", this.header.typeIdsOff, this.header.typeIdsSize, 4, fileSize);
+        this.validateSection(errors, "protoIds", this.header.protoIdsOff, this.header.protoIdsSize, 12, fileSize);
+        this.validateSection(errors, "fieldIds", this.header.fieldIdsOff, this.header.fieldIdsSize, 8, fileSize);
+        this.validateSection(errors, "methodIds", this.header.methodIdsOff, this.header.methodIdsSize, 8, fileSize);
+        this.validateSection(errors, "classDefs", this.header.classDefsOff, this.header.classDefsSize, 32, fileSize);
+        this.validateSection(errors, "data", this.header.dataOff, this.header.dataSize, 1, fileSize);
+
+        if (this.header.mapOff === 0 || this.header.mapOff >= fileSize) {
+            errors.push(`mapOff out of range: ${this.header.mapOff}`);
+        }
+
+        const computedSignature = DexUtils.computeSha1(bytes.subarray(DEX_SIGNATURE_DATA_OFFSET));
+        if (!DexUtils.bytesEqual(this.header.signature, computedSignature)) {
+            errors.push("signature mismatch (SHA-1)");
+        }
+
+        const computedChecksum = DexUtils.computeAdler32(bytes.subarray(DEX_CHECKSUM_DATA_OFFSET));
+        if ((computedChecksum >>> 0) !== (this.header.checksum >>> 0)) {
+            errors.push(`checksum mismatch: header=${this.header.checksum >>> 0}, computed=${computedChecksum >>> 0}`);
+        }
+
+        return {
+            ok: errors.length === 0,
+            errors
+        };
+    }
+
+    private validateSection(
+        errors: string[],
+        name: string,
+        off: number,
+        size: number,
+        itemSize: number,
+        fileSize: number
+    ): void {
+        if (size === 0) {
+            if (off !== 0) {
+                errors.push(`${name} offset should be 0 when size is 0: off=${off}`);
+            }
+            return;
+        }
+
+        if (off <= 0 || off >= fileSize) {
+            errors.push(`${name} offset out of range: off=${off}`);
+            return;
+        }
+
+        const byteSize = size * itemSize;
+        if (off + byteSize > fileSize) {
+            errors.push(`${name} exceeds file bounds: off=${off}, size=${size}, itemSize=${itemSize}`);
+        }
     }
 
     /**
@@ -1051,7 +970,7 @@ export class DexFile {
                 const offset = this.buffer.getPosition() - encodedCatchHandlerListStart;
                 let size = this.buffer.readSLeb128();
                 let catchesAll = false;
-                
+
                 if (size <= 0) {
                     catchesAll = true;
                     size = -size;
